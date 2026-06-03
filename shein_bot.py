@@ -13,7 +13,7 @@ REMISE     = "60%"
 
 # ─── Ton ID Telegram — seul toi peux utiliser le bot ─────────────────────────
 # Pour trouver ton ID : envoie /start à @userinfobot sur Telegram
-OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))  # remplace 0 par ton ID
+OWNER_IDS = set(map(int, os.environ.get("OWNER_IDS", "0").split(",")))
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 WAIT_PRICE        = 1
@@ -261,8 +261,8 @@ async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Bloquer tout le monde sauf toi
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("⛔ Accès refusé.")
+if update.effective_user.id not in OWNER_IDS:
+    await update.message.reply_text("⛔ Accès refusé.")
         return
 
     text = update.message.text.strip()
