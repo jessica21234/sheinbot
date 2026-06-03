@@ -7,7 +7,7 @@ from telegram.ext import (
 )
 
 BOT_TOKEN  = os.environ.get("BOT_TOKEN", "METS_TON_TOKEN_ICI")
-CANAL      = os.environ.get("CANAL", "@Bonsplanshein")
+CANAL      = os.environ.get("CANAL", "@Erdezz")
 CODE_AFFIL = os.environ.get("CODE_AFFIL", "TTJ7Y")
 REMISE     = "60%"
 
