@@ -11,7 +11,7 @@ CANAL      = os.environ.get("CANAL", "@Erdezz")
 CODE_AFFIL = os.environ.get("CODE_AFFIL", "TTJ7Y")
 REMISE     = "60%"
 
-OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
+OWNER_ID   = int(os.environ.get("OWNER_ID", "1"))
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 WAIT_PRICE        = 1
