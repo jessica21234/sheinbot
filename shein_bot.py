@@ -164,6 +164,22 @@ async def scrape_shein(url: str):
             og = lambda p: (soup.find("meta", property=p) or {}).get("content")
             name  = og("og:title")
             img   = og("og:image")
+          async def scrape_shein(url: str):
+    name, price, img = None, None, None
+
+    try:
+        import requests as req
+        from bs4 import BeautifulSoup
+        session = req.Session()
+        session.get("https://fr.shein.com/", headers=HEADERS, timeout=8)
+        r = session.get(url, headers=HEADERS, timeout=15)
+        html_text = r.text
+
+        if r.status_code == 200 and len(html_text) > 500:
+            soup = BeautifulSoup(html_text, "lxml")
+            og = lambda p: (soup.find("meta", property=p) or {}).get("content")
+            name  = og("og:title")
+            img   = og("og:image")
             price = og("product:price:amount")
 
             if not price:
@@ -188,22 +204,16 @@ async def scrape_shein(url: str):
                     if m2:
                         price = m2.group(1)
                         break
+
     except Exception as e:
         logging.warning(f"Requests scraping error: {e}")
 
-    # Si prix toujours manquant → Playwright
-    if not price or not name:
-        logging.info("Lancement Playwright pour extraction complète...")
-        pw = await scrape_with_playwright(url)
-        if not name:
-            name = pw.get("name")
-        if not price:
-            price = pw.get("price")
-        if not img:
-            img = pw.get("image")
+    # Nom fallback depuis l'URL
+    if not name:
+        name = extract_name_from_url(url)
 
     # Nettoyage nom
-    name = clean_name(name) if name else extract_name_from_url(url)
+    name = clean_name(name) if name else "Produit Shein"
 
     # Nettoyage prix
     if price:
