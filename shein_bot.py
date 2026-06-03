@@ -11,9 +11,7 @@ CANAL      = os.environ.get("CANAL", "@Erdezz")
 CODE_AFFIL = os.environ.get("CODE_AFFIL", "TTJ7Y")
 REMISE     = "60%"
 
-# ─── Ton ID Telegram — seul toi peux utiliser le bot ─────────────────────────
-# Pour trouver ton ID : envoie /start à @userinfobot sur Telegram
-OWNER_ID   = int(os.environ.get("OWNER_ID", "1"))  # remplace 0 par ton ID
+OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 WAIT_PRICE        = 1
@@ -37,15 +35,8 @@ def resolve_url(url: str) -> str:
 # ─── Nettoyage nom produit ────────────────────────────────────────────────────
 
 def clean_name(raw: str) -> str:
-    """
-    Shein met des noms ultra longs avec des mots-clés SEO.
-    On garde seulement les 6 premiers mots significatifs.
-    Ex: "SHEGLAM Longwear Invisible Hold Colle Pour Cils-Clear Marque..."
-    → "SHEGLAM Longwear Invisible Hold Colle Pour Cils"
-    """
     if not raw:
         return "Produit Shein"
-    # Supprimer les parties génériques après certains mots-clés
     cut_words = [
         "pour femme", "pour homme", "pour fille", "pour garçon",
         "mode", "casual", "fashion", "style", "women", "men",
@@ -56,88 +47,15 @@ def clean_name(raw: str) -> str:
     cut_pos = len(raw)
     for w in cut_words:
         pos = name_lower.find(w)
-        if pos > 20:  # pas au tout début
+        if pos > 20:
             cut_pos = min(cut_pos, pos)
     raw = raw[:cut_pos].strip(" -,|")
-
-    # Garder max 7 mots
     words = raw.split()
     if len(words) > 7:
         raw = " ".join(words[:7])
-
     return raw.strip(" -,|") or "Produit Shein"
 
-# ─── Scraping avec Playwright (rendu JS) ─────────────────────────────────────
-
-async def scrape_with_playwright(url: str) -> dict:
-    """Scraping complet avec navigateur headless pour récupérer prix/nom/image."""
-    result = {"name": None, "price": None, "image": None}
-    try:
-        from playwright.async_api import async_playwright
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            ctx = await browser.new_context(
-                user_agent=HEADERS["User-Agent"],
-                locale="fr-FR",
-                extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9"}
-            )
-            page = await ctx.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(4000)  # attend le JS
-
-            html = await page.content()
-
-            # Nom via og:title ou h1
-            og_title = await page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content")
-            h1 = await page.evaluate("() => document.querySelector('h1')?.innerText")
-            result["name"] = og_title or h1
-
-            # Image via og:image
-            og_img = await page.evaluate("() => document.querySelector('meta[property=\"og:image\"]')?.content")
-            result["image"] = og_img
-
-            # Prix — plusieurs sélecteurs Shein possibles
-            price_selectors = [
-                ".product-intro__head-price .from",
-                ".product-intro__head-price .origin",
-                "[class*='price'] .from",
-                "[class*='sale-price']",
-                "[data-test='price']",
-                ".price-wrapper .price",
-                ".j-sa-product-detail-price",
-            ]
-            for sel in price_selectors:
-                try:
-                    el = await page.query_selector(sel)
-                    if el:
-                        txt = await el.inner_text()
-                        m = re.search(r'[\d]+[.,]\d{2}', txt.replace(" ", ""))
-                        if m:
-                            result["price"] = m.group(0).replace(",", ".")
-                            break
-                except Exception:
-                    pass
-
-            # Fallback prix dans le HTML
-            if not result["price"]:
-                for pattern in [
-                    r'"salePrice"[:\s]*\{[^}]*"amount"[:\s]*"?([\d.]+)"?',
-                    r'"retailPrice"[:\s]*\{[^}]*"amount"[:\s]*"?([\d.]+)"?',
-                    r'"price"[:\s]*"?([\d]{1,3}[.,]\d{2})"?',
-                    r'\"amount\":\"([\d.]+)\"',
-                ]:
-                    m = re.search(pattern, html)
-                    if m:
-                        result["price"] = m.group(1).replace(",", ".")
-                        break
-
-            await browser.close()
-            logging.info(f"Playwright result: {result}")
-    except Exception as e:
-        logging.warning(f"Playwright error: {e}")
-    return result
-
-# ─── Scraping principal ───────────────────────────────────────────────────────
+# ─── Scraping principal (requests uniquement) ─────────────────────────────────
 
 def extract_name_from_url(url: str) -> str:
     m = re.search(r'shein\.com/(?:[a-z]{2}/)?(.+?)-p-\d+', url)
@@ -147,30 +65,11 @@ def extract_name_from_url(url: str) -> str:
     return "Produit Shein"
 
 async def scrape_shein(url: str):
-    """Essaie d'abord requests simple, puis Playwright si prix manquant."""
-    name, price, img = None, None, None
-
-    # Tentative rapide via requests
-    try:
-        import requests as req
-        from bs4 import BeautifulSoup
-        session = req.Session()
-        session.get("https://fr.shein.com/", headers=HEADERS, timeout=8)
-        r = session.get(url, headers=HEADERS, timeout=15)
-        html_text = r.text
-
-        if r.status_code == 200 and len(html_text) > 500:
-            soup = BeautifulSoup(html_text, "lxml")
-            og = lambda p: (soup.find("meta", property=p) or {}).get("content")
-            name  = og("og:title")
-            img   = og("og:image")
-          async def scrape_shein(url: str):
     name, price, img = None, None, None
 
     try:
-        import requests as req
         from bs4 import BeautifulSoup
-        session = req.Session()
+        session = requests.Session()
         session.get("https://fr.shein.com/", headers=HEADERS, timeout=8)
         r = session.get(url, headers=HEADERS, timeout=15)
         html_text = r.text
@@ -218,7 +117,10 @@ async def scrape_shein(url: str):
     # Nettoyage prix
     if price:
         price = re.sub(r'[^\d.,]', '', str(price)).replace(",", ".").strip(".")
-        if price in ("", ".") or float(price) < 0.5:
+        try:
+            if price in ("", ".") or float(price) < 0.5:
+                price = None
+        except ValueError:
             price = None
 
     return name, price, img
@@ -226,14 +128,6 @@ async def scrape_shein(url: str):
 # ─── Formatage message canal ──────────────────────────────────────────────────
 
 def build_caption(name: str, price, url: str) -> str:
-    """
-    Format comme la capture :
-    NOM DU PRODUIT 😍
-    Prix : 12.99€
-    -60% coupon : TU87V 🏷️
-
-    👉 https://...
-    """
     lines = [f"{name.upper()} 😍"]
     if price:
         lines.append(f"Prix : {price}€")
@@ -270,14 +164,12 @@ async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Handler message entrant ──────────────────────────────────────────────────
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Bloquer tout le monde sauf toi
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("⛔ Accès refusé.")
         return
 
     text = update.message.text.strip()
 
-    # Si on attend une saisie manuelle de prix
     if context.user_data.get("awaiting_custom_price"):
         context.user_data["awaiting_custom_price"] = False
         m = re.search(r'(\d+[.,]?\d{0,2})', text)
@@ -288,6 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Envoie un nombre comme 12.99 ou 15")
             context.user_data["awaiting_custom_price"] = True
         return
+
     url_match = re.search(r'https?://[^\s]*(shein\.com|onelink\.shein\.com)[^\s]*', text)
 
     if not url_match:
@@ -303,14 +196,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     raw_url = url_match.group(0)
 
-    # Prix dans le message ?
     clean_text = text.replace(raw_url, "").strip()
     price_match = re.search(r'\b(\d+[.,]\d{1,2})\b', clean_text)
     manual_price = price_match.group(1).replace(",", ".") if price_match else None
 
     await update.message.reply_text("⏳ Récupération des infos en cours...")
 
-    # Résoudre lien onelink
     if "onelink.shein.com" in raw_url:
         resolved = resolve_url(raw_url)
         scrape_url = resolved if "shein.com" in resolved and "onelink" not in resolved else raw_url
@@ -320,7 +211,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name, scraped_price, img = await scrape_shein(scrape_url)
     price = manual_price or scraped_price
 
-    # Toujours conserver le lien original court pour l'affichage
     context.user_data.update({"url": raw_url, "name": name, "price": price, "img": img, "awaiting_custom_price": False})
 
     if price:
@@ -331,7 +221,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Clavier de sélection de prix ────────────────────────────────────────────
 
 async def ask_price_keyboard(update: Update, name: str):
-    """Envoie un clavier inline avec des tranches de prix rapides."""
     tranches = [
         ["0-5€", "5-10€", "10-15€", "15-20€"],
         ["20-30€", "30-40€", "40-50€", "50-75€"],
@@ -348,14 +237,7 @@ async def ask_price_keyboard(update: Update, name: str):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ─── Handler prix manuel (saisie texte après avoir cliqué "Saisir manuellement") ─
-
-async def receive_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Gardé pour compatibilité, la logique est dans handle_message
-    pass
-
-
-# ─── Aperçu depuis un callback query (pas un message) ────────────────────────
+# ─── Aperçu depuis un callback query ─────────────────────────────────────────
 
 async def send_preview_from_query(query, context: ContextTypes.DEFAULT_TYPE):
     url     = context.user_data["url"]
@@ -386,9 +268,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # ── Sélection de prix via clavier ──────────────────────────────────────────
     if query.data.startswith("price:"):
-        choix = query.data[6:]  # ex: "10-15€" ou "✏️ Saisir..." ou "🚫 Sans prix"
+        choix = query.data[6:]
 
         if choix == "🚫 Sans prix":
             context.user_data["price"] = None
@@ -401,7 +282,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["awaiting_custom_price"] = True
             return
 
-        # Tranche choisie → prendre la valeur du milieu
         m = re.findall(r'\d+', choix)
         if len(m) == 2:
             mid = (int(m[0]) + int(m[1])) / 2
@@ -413,7 +293,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_preview_from_query(query, context)
         return
 
-    # ── Publier / Annuler ──────────────────────────────────────────────────────
     if query.data == "cancel":
         context.user_data.clear()
         try:
@@ -469,11 +348,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # Pas de ConversationHandler — handlers simples, jamais bloquants
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_callback))
-
     print("🤖 Bot Shein v6 démarré !")
     app.run_polling(drop_pending_updates=True)
 
