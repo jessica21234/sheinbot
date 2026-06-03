@@ -314,11 +314,9 @@ async def send_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(caption, reply_markup=keyboard, disable_web_page_preview=False)
 
 # ─── Handler message entrant ──────────────────────────────────────────────────
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info(f"Message reçu de user_id={update.effective_user.id} | OWNER_IDS={OWNER_IDS}")
     if update.effective_user.id not in OWNER_IDS:
-        await update.message.reply_text("⛔ Accès refusé.")
-        return
 
     text = update.message.text.strip()
 
