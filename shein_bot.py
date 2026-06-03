@@ -13,7 +13,7 @@ REMISE     = "60%"
 
 # ─── Ton ID Telegram — seul toi peux utiliser le bot ─────────────────────────
 # Pour trouver ton ID : envoie /start à @userinfobot sur Telegram
-OWNER_ID   = int(os.environ.get("OWNER_ID", "0"))  # remplace 0 par ton ID
+OWNER_ID   = int(os.environ.get("OWNER_ID", "1"))  # remplace 0 par ton ID
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 WAIT_PRICE        = 1
