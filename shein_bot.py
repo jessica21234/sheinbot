@@ -22,21 +22,6 @@ WAIT_PRICE_CUSTOM = 2
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Cache-Control": "max-age=0",
-}
-
-HEADERS_MOBILE = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Connection": "keep-alive",
 }
 
 # ─── Résolution lien court ────────────────────────────────────────────────────
@@ -84,143 +69,67 @@ def clean_name(raw: str) -> str:
 
 # ─── Scraping avec Playwright (rendu JS) ─────────────────────────────────────
 
-def extract_price_from_html(html: str) -> str | None:
-    """Extraction prix agressive depuis le HTML brut — patterns étendus."""
-    patterns = [
-        # JSON structuré Shein
-        r'"salePrice"\s*:\s*\{\s*[^}]*"amount"\s*:\s*"?([\d.]+)"?',
-        r'"retailPrice"\s*:\s*\{\s*[^}]*"amount"\s*:\s*"?([\d.]+)"?',
-        r'"currentPrice"\s*:\s*\{\s*[^}]*"amount"\s*:\s*"?([\d.]+)"?',
-        r'"discountPrice"\s*:\s*\{\s*[^}]*"amount"\s*:\s*"?([\d.]+)"?',
-        r'"priceInfo"\s*:\s*\{\s*[^}]*"salePrice"\s*:\s*"?([\d.]+)"?',
-        r'"amount"\s*:\s*"([\d]{1,3}[.,]\d{2})"',
-        r'"amount"\s*:\s*([\d]{1,3}\.\d{2})',
-        # JSON-LD schema.org
-        r'"price"\s*:\s*"([\d]{1,3}[.,]\d{2})"',
-        r'"price"\s*:\s*([\d]{1,3}\.\d{2})',
-        r'"lowPrice"\s*:\s*"?([\d.]+)"?',
-        r'"highPrice"\s*:\s*"?([\d.]+)"?',
-        # Attributs HTML
-        r'data-price="([\d.]+)"',
-        r'data-sale-price="([\d.]+)"',
-        r'itemprop="price"\s+content="([\d.]+)"',
-        r'content="([\d]{1,3}\.\d{2})"\s+itemprop="price"',
-        # Texte brut avec symbole €
-        r'([\d]{1,3}[.,]\d{2})\s*€',
-        r'€\s*([\d]{1,3}[.,]\d{2})',
-    ]
-    for pat in patterns:
-        m = re.search(pat, html)
-        if m:
-            val = m.group(1).replace(",", ".").strip()
-            try:
-                if 0.5 < float(val) < 10000:
-                    return val
-            except ValueError:
-                continue
-    return None
-
-
 async def scrape_with_playwright(url: str) -> dict:
-    """Scraping complet avec navigateur headless — version améliorée."""
+    """Scraping complet avec navigateur headless pour récupérer prix/nom/image."""
     result = {"name": None, "price": None, "image": None}
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-web-security",
-                ]
-            )
-            # Contexte desktop
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
             ctx = await browser.new_context(
                 user_agent=HEADERS["User-Agent"],
                 locale="fr-FR",
-                extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9"},
-                viewport={"width": 1280, "height": 800},
+                extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9"}
             )
-            # Masquer le fait qu'on est un bot
-            await ctx.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                window.chrome = { runtime: {} };
-            """)
             page = await ctx.new_page()
-
-            # Bloquer les ressources inutiles pour aller plus vite
-            await page.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,mp4,mp3}", lambda r: r.abort())
-
-            await page.goto(url, wait_until="domcontentloaded", timeout=35000)
-            await page.wait_for_timeout(5000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(4000)  # attend le JS
 
             html = await page.content()
 
-            # ── Nom ──
+            # Nom via og:title ou h1
             og_title = await page.evaluate("() => document.querySelector('meta[property=\"og:title\"]')?.content")
             h1 = await page.evaluate("() => document.querySelector('h1')?.innerText")
             result["name"] = og_title or h1
 
-            # ── Image ──
+            # Image via og:image
             og_img = await page.evaluate("() => document.querySelector('meta[property=\"og:image\"]')?.content")
             result["image"] = og_img
 
-            # ── Prix via sélecteurs CSS (mise à jour 2024-2025) ──
+            # Prix — plusieurs sélecteurs Shein possibles
             price_selectors = [
-                # Sélecteurs récents Shein
-                "[class*='ProductIntroHeadPrice'] [class*='from']",
-                "[class*='ProductIntroHeadPrice'] [class*='sale']",
-                "[class*='product-intro__head-price'] .from",
-                "[class*='product-price'] [class*='sale']",
-                "[class*='productPrice'] [class*='sale']",
-                # Anciens sélecteurs
                 ".product-intro__head-price .from",
                 ".product-intro__head-price .origin",
+                "[class*='price'] .from",
                 "[class*='sale-price']",
                 "[data-test='price']",
                 ".price-wrapper .price",
                 ".j-sa-product-detail-price",
-                # Sélecteurs génériques avec €
-                "[class*='price']:not([class*='original']):not([class*='del'])",
             ]
             for sel in price_selectors:
                 try:
                     el = await page.query_selector(sel)
                     if el:
                         txt = await el.inner_text()
-                        m = re.search(r'[\d]+[.,]\d{2}', txt.replace(" ", "").replace("\xa0", ""))
+                        m = re.search(r'[\d]+[.,]\d{2}', txt.replace(" ", ""))
                         if m:
-                            val = m.group(0).replace(",", ".")
-                            if float(val) > 0.5:
-                                result["price"] = val
-                                break
+                            result["price"] = m.group(0).replace(",", ".")
+                            break
                 except Exception:
                     pass
 
-            # ── Fallback : extraction depuis le HTML brut ──
+            # Fallback prix dans le HTML
             if not result["price"]:
-                result["price"] = extract_price_from_html(html)
-
-            # ── Fallback : JSON dans les balises script ──
-            if not result["price"]:
-                scripts = await page.evaluate("""
-                    () => Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
-                              .map(s => s.textContent)
-                """)
-                for s in scripts:
-                    try:
-                        d = json.loads(s or "")
-                        offers = d.get("offers", {})
-                        if isinstance(offers, list):
-                            offers = offers[0]
-                        p = offers.get("price") or offers.get("lowPrice")
-                        if p:
-                            result["price"] = str(p).replace(",", ".")
-                            break
-                    except Exception:
-                        pass
+                for pattern in [
+                    r'"salePrice"[:\s]*\{[^}]*"amount"[:\s]*"?([\d.]+)"?',
+                    r'"retailPrice"[:\s]*\{[^}]*"amount"[:\s]*"?([\d.]+)"?',
+                    r'"price"[:\s]*"?([\d]{1,3}[.,]\d{2})"?',
+                    r'\"amount\":\"([\d.]+)\"',
+                ]:
+                    m = re.search(pattern, html)
+                    if m:
+                        result["price"] = m.group(1).replace(",", ".")
+                        break
 
             await browser.close()
             logging.info(f"Playwright result: {result}")
@@ -238,17 +147,16 @@ def extract_name_from_url(url: str) -> str:
     return "Produit Shein"
 
 async def scrape_shein(url: str):
-    """Essaie requests (desktop puis mobile), puis Playwright si prix manquant."""
+    """Essaie d'abord requests simple, puis Playwright si prix manquant."""
     name, price, img = None, None, None
 
-    # ── Tentative 1 : requests desktop ──
+    # Tentative rapide via requests
     try:
         import requests as req
         from bs4 import BeautifulSoup
         session = req.Session()
-        session.headers.update(HEADERS)
-        session.get("https://fr.shein.com/", timeout=8)
-        r = session.get(url, timeout=15)
+        session.get("https://fr.shein.com/", headers=HEADERS, timeout=8)
+        r = session.get(url, headers=HEADERS, timeout=15)
         html_text = r.text
 
         if r.status_code == 200 and len(html_text) > 500:
@@ -258,45 +166,32 @@ async def scrape_shein(url: str):
             img   = og("og:image")
             price = og("product:price:amount")
 
-            # JSON-LD schema.org
             if not price:
                 for s in soup.find_all("script", type="application/ld+json"):
                     try:
                         d = json.loads(s.string or "")
-                        offers = d.get("offers", {})
-                        if isinstance(offers, list):
-                            offers = offers[0]
-                        p = offers.get("price") or offers.get("lowPrice")
-                        if p:
-                            price = str(p)
+                        if isinstance(d, dict) and "offers" in d:
+                            price = str(d["offers"].get("price", ""))
                             if not img:
-                                imgs = d.get("image", [])
-                                img = imgs[0] if isinstance(imgs, list) and imgs else d.get("image")
+                                img = d.get("image", [None])[0] if isinstance(d.get("image"), list) else d.get("image")
                             break
                     except Exception:
                         pass
 
-            # Extraction HTML brut
             if not price:
-                price = extract_price_from_html(html_text)
+                for pattern in [
+                    r'"salePrice"[:\s]*\{[^}]*"amount"[:\s]*"?([\d.]+)"?',
+                    r'"retailPrice"[:\s]*\{[^}]*"amount"[:\s]*"?([\d.]+)"?',
+                    r'\"amount\":\"([\d.]+)\"',
+                ]:
+                    m2 = re.search(pattern, html_text)
+                    if m2:
+                        price = m2.group(1)
+                        break
     except Exception as e:
-        logging.warning(f"Requests desktop scraping error: {e}")
+        logging.warning(f"Requests scraping error: {e}")
 
-    # ── Tentative 2 : requests mobile (Shein renvoie parfois plus d'infos) ──
-    if not price:
-        try:
-            import requests as req
-            session2 = req.Session()
-            session2.headers.update(HEADERS_MOBILE)
-            r2 = session2.get(url, timeout=15)
-            if r2.status_code == 200 and len(r2.text) > 500:
-                price = extract_price_from_html(r2.text)
-                if price:
-                    logging.info(f"Prix trouvé via user-agent mobile : {price}")
-        except Exception as e:
-            logging.warning(f"Requests mobile scraping error: {e}")
-
-    # ── Tentative 3 : Playwright (navigateur headless complet) ──
+    # Si prix toujours manquant → Playwright
     if not price or not name:
         logging.info("Lancement Playwright pour extraction complète...")
         pw = await scrape_with_playwright(url)
